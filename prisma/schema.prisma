@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  studentId String   @unique @map("student_id")
+  name      String
+  email     String   @unique
+  googleSub String   @unique @map("google_sub")
+  phone     String?
+  fcmToken  String?  @map("fcm_token")
+  createdAt DateTime @default(now()) @map("created_at")
+  orders    Order[]
+
+  @@map("users")
+}
+
+model Restaurant {
+  id           String      @id @default(uuid())
+  name         String
+  code         String      @unique
+  maxLoadScore Int         @default(600) @map("max_load_score")
+  isLocked     Boolean     @default(false) @map("is_locked")
+  lockedUntil  DateTime?   @map("locked_until")
+  openTime     String      @map("open_time")
+  closeTime    String      @map("close_time")
+  menus        Menu[]
+  orderItems   OrderItem[]
+  loadLogs     LoadLog[]
+
+  @@map("restaurants")
+}
+
+model Menu {
+  id           String      @id @default(uuid())
+  restaurantId String      @map("restaurant_id")
+  name         String
+  price        Int
+  cookTimeSec  Int         @default(300) @map("cook_time_sec")
+  isSoldout    Boolean     @default(false) @map("is_soldout")
+  isActive     Boolean     @default(true) @map("is_active")
+  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id])
+  orderItems   OrderItem[]
+
+  @@map("menus")
+}
+
+model Order {
+  id             String      @id @default(uuid())
+  userId         String      @map("user_id")
+  status         String      @default("PENDING")
+  totalPrice     Int         @map("total_price")
+  idempotencyKey String      @unique @map("idempotency_key")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  paidAt         DateTime?   @map("paid_at")
+  user           User        @relation(fields: [userId], references: [id])
+  orderItems     OrderItem[]
+  payment        Payment?
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String    @id @default(uuid())
+  orderId      String    @map("order_id")
+  menuId       String    @map("menu_id")
+  restaurantId String    @map("restaurant_id")
+  orderNumber  String    @map("order_number")
+  quantity     Int       @default(1)
+  unitPrice    Int       @map("unit_price")
+  status       String    @default("PENDING")
+  completedAt  DateTime? @map("completed_at")
+  order        Order     @relation(fields: [orderId], references: [id])
+  menu         Menu      @relation(fields: [menuId], references: [id])
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@map("order_items")
+}
+
+model Payment {
+  id           String    @id @default(uuid())
+  orderId      String    @unique @map("order_id")
+  provider     String    @default("toss")
+  providerTxId String?   @unique @map("provider_tx_id")
+  status       String    @default("PENDING")
+  amount       Int
+  paidAt       DateTime? @map("paid_at")
+  refundedAt   DateTime? @map("refunded_at")
+  order        Order     @relation(fields: [orderId], references: [id])
+
+  @@map("payments")
+}
+
+model LoadLog {
+  id               String     @id @default(uuid())
+  restaurantId     String     @map("restaurant_id")
+  loadScore        Int        @map("load_score")
+  estimatedWaitSec Int        @map("estimated_wait_sec")
+  actualWaitSec    Int?       @map("actual_wait_sec")
+  recordedAt       DateTime   @default(now()) @map("recorded_at")
+  restaurant       Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@map("load_logs")
+}
