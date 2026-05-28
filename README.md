@@ -3,7 +3,7 @@
 # dankook-preorder-backend
 
 단국대학교 학식 선주문 서비스의 백엔드 서버입니다.  
-Node.js / Express 기반으로 REST API, WebSocket 실시간 통신, 부하 관리 엔진, 결제 연동을 제공합니다.
+Node.js / Express 기반으로 REST API, WebSocket 실시간 통신, 결제 연동을 제공합니다.
 
 ---
 
@@ -36,8 +36,7 @@ src/
 │   ├── orders.js           # 주문 생성 / 조회 / 취소
 │   ├── payments.js         # Toss 결제 확인 / 웹훅
 │   ├── kitchen.js          # 주방 디스플레이 (조리 현황 조회 / 완료 처리)
-│   ├── ai.js               # 부하 점수 / 대기 시간 조회
-│   └── admin.js            # 관리자 전용 (식당 CRUD, 관리자 계정 생성)
+│   └── admin.js            # 관리자 전용 (식당 CRUD, 메뉴·주문 통계)
 ├── middlewares/
 │   ├── auth.js             # JWT 검증 미들웨어 (authenticate, requireAdmin)
 │   └── errorHandler.js     # 전역 오류 처리
@@ -47,8 +46,6 @@ src/
 │   ├── fcm.js              # FCM 푸시 알림 발송
 │   ├── portalAuth.js       # 단국대 포털 인증 (조리 시간 조회용)
 │   └── scraper.js          # 단국대 홈페이지 메뉴 스크래핑
-└── ai/
-    └── loadEngine.js       # 식당 부하 점수 산출 / 자동 잠금 / 대기 시간 계산
 
 prisma/
 ├── schema.prisma           # DB 스키마 정의
@@ -144,11 +141,6 @@ NODE_ENV=development
 DANKOOK_MENU_URL="https://www.dankook.ac.kr/web/kor/1947_commons"
 SCRAPE_CRON="0 7 * * 1-5"          # 평일 오전 7시
 
-# 부하 관리
-LOAD_LOCK_THRESHOLD=600             # 자동 잠금 임계치 (점수)
-LOAD_WARN_THRESHOLD=400             # 경고 임계치 (점수)
-LOCK_DURATION_MIN=10                # 잠금 지속 시간 (분)
-PEAK_HOUR_WEIGHT=1.3                # 피크 시간대 가중치 (11:30~13:30)
 ```
 
 ---
@@ -188,7 +180,7 @@ PEAK_HOUR_WEIGHT=1.3                # 피크 시간대 가중치 (11:30~13:30)
 
 | 메서드 | 경로 | 인증 | 설명 |
 |--------|------|------|------|
-| GET | `/restaurants` | - | 전체 식당 목록 (부하 점수 / 대기 시간 포함) |
+| GET | `/restaurants` | - | 전체 식당 목록 (영업·잠금 상태 포함) |
 | GET | `/restaurants/:id/menus` | - | 특정 식당 메뉴 조회 |
 | PATCH | `/restaurants/:id/lock` | 관리자 | 식당 수동 잠금 / 해제 |
 
@@ -243,15 +235,6 @@ PENDING → PAID → PARTIALLY_COMPLETED → COMPLETED
 
 ---
 
-### 부하 엔진 `/ai`
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| GET | `/ai/load/:restaurantId` | 현재 부하 점수 및 예상 대기 시간 조회 |
-| POST | `/ai/load/check` | 신규 주문 추가 시 잠금 여부 사전 확인 |
-
----
-
 ### 관리자 `/admin`
 
 | 메서드 | 경로 | 설명 |
@@ -262,32 +245,6 @@ PENDING → PAID → PARTIALLY_COMPLETED → COMPLETED
 | POST | `/admin/users` | 관리자 계정 생성 |
 
 > 모든 `/admin` 엔드포인트는 `requireAdmin` 미들웨어로 보호됩니다.
-
----
-
-## 부하 관리 엔진 (`src/ai/loadEngine.js`)
-
-식당이 과부하 상태가 되면 자동으로 주문을 차단하는 엔진입니다.
-
-### 부하 점수 계산식
-
-```
-부하 점수 = (활성 조리 잔여 점수 + 신규 주문 점수) × 피크 가중치
-
-활성 조리 잔여 점수 = Σ (잔여 조리 시간(초) × 수량)
-신규 주문 점수     = Σ (메뉴 조리 시간(초) × 수량)
-피크 가중치        = 11:30~13:30 → 1.3, 그 외 → 1.0
-```
-
-### 임계치
-
-| 구분 | 기본값 | 동작 |
-|------|--------|------|
-| 경고 (`LOAD_WARN_THRESHOLD`) | 400점 | 앱에 대기 시간 경고 표시 |
-| 잠금 (`LOAD_LOCK_THRESHOLD`) | 600점 | 식당 자동 잠금 (`LOCK_DURATION_MIN`분 후 해제) |
-
-- 주문 **취소** 시 즉시 부하 재계산 → 점수가 임계치 미만이면 자동 잠금 해제
-- 부하 이력은 `load_logs` 테이블에 저장되어 실제 대기 시간과 비교 가능
 
 ---
 
@@ -318,7 +275,6 @@ menus               메뉴 (price, cook_time_sec, is_soldout, is_active)
 orders              주문 (idempotency_key unique, status, paid_at)
 order_items         주문 상세 항목 (order_number, status, completed_at)
 payments            결제 (provider_tx_id unique, status, refunded_at)
-load_logs           부하 이력 (load_score, estimated_wait_sec, actual_wait_sec)
 ```
 
 ### 관계도
@@ -327,7 +283,6 @@ load_logs           부하 이력 (load_score, estimated_wait_sec, actual_wait_s
 users ──< orders ──< order_items >── menus >── restaurants
 orders ──── payments
 order_items >── restaurants
-restaurants ──< load_logs
 ```
 
 ---

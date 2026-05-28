@@ -2,7 +2,6 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middlewares/auth');
-const { checkLoad, recalculateAfterCancel } = require('../ai/loadEngine');
 const { broadcastToKitchen, broadcastToOrder } = require('../utils/websocket');
 
 const router = express.Router();
@@ -33,10 +32,8 @@ router.post('/validate', authenticate, async (req, res, next) => {
       return res.status(400).json({ code: 'EMPTY_CART', message: '장바구니가 비어있습니다.' });
     }
 
-    const warnings = [];
     const errors = [];
     let totalPrice = 0;
-    const enriched = [];
 
     // 메뉴/식당 정보 조회
     const menuIds = items.map((i) => i.menuId);
@@ -55,37 +52,14 @@ router.post('/validate', authenticate, async (req, res, next) => {
       if (menu.restaurant.isLocked) { errors.push({ menuId: item.menuId, name: menu.name, restaurantName: menu.restaurant.name, reason: 'RESTAURANT_LOCKED' }); continue; }
 
       totalPrice += menu.price * item.quantity;
-      enriched.push({ ...item, menu, restaurantId: menu.restaurantId });
     }
 
     if (errors.length > 0) {
       return res.status(422).json({ code: 'VALIDATION_FAILED', errors });
     }
 
-    // 식당별 AI 부하 체크
-    const restaurantGroups = new Map();
-    for (const item of enriched) {
-      if (!restaurantGroups.has(item.restaurantId)) restaurantGroups.set(item.restaurantId, []);
-      restaurantGroups.get(item.restaurantId).push({ cookTimeSec: item.menu.cookTimeSec, quantity: item.quantity });
-    }
-
-    for (const [restaurantId, newItems] of restaurantGroups) {
-      const load = await checkLoad(restaurantId, newItems);
-      if (load.isLocked) {
-        const restaurant = menus.find((m) => m.restaurantId === restaurantId)?.restaurant;
-        return res.status(423).json({
-          code: 'RESTAURANT_LOCKED',
-          message: `${restaurant?.name || '식당'}이 주문이 많아 잠시 주문을 받지 않습니다.`,
-          lockedUntil: load.lockedUntil,
-        });
-      }
-      if (load.isWarning) {
-        warnings.push({ restaurantId, loadScore: load.loadScore, estimatedWaitMin: Math.ceil(load.estimatedWaitSec / 60) });
-      }
-    }
-
     const idempotencyKey = uuidv4();
-    res.json({ idempotencyKey, totalPrice, warnings });
+    res.json({ idempotencyKey, totalPrice });
   } catch (err) {
     next(err);
   }
@@ -241,10 +215,6 @@ router.post('/:id/cancel', authenticate, async (req, res, next) => {
     if (order.payment?.status === 'PAID') {
       await triggerRefund(order.payment.id);
     }
-
-    // 취소 후 부하 재계산
-    const restaurantIds = [...new Set(order.orderItems.map((i) => i.restaurantId))];
-    for (const rid of restaurantIds) await recalculateAfterCancel(rid);
 
     res.json({ message: '주문이 취소되었습니다.' });
   } catch (err) {

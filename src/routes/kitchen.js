@@ -36,19 +36,6 @@ router.patch('/items/:id/complete', requireAdmin, async (req, res, next) => {
       include: { order: { include: { user: true, orderItems: true } }, menu: true, restaurant: true },
     });
 
-    // 실제 조리시간 기록
-    if (item.order.paidAt) {
-      const actualSec = Math.round((new Date() - new Date(item.order.paidAt)) / 1000);
-      await prisma.loadLog.create({
-        data: {
-          restaurantId: item.restaurantId,
-          loadScore: 0,
-          estimatedWaitSec: item.menu.cookTimeSec,
-          actualWaitSec: actualSec,
-        },
-      });
-    }
-
     // 주문의 모든 아이템 완료 여부 확인
     const allItems = await prisma.orderItem.findMany({ where: { orderId: item.orderId } });
     const allDone = allItems.every((i) => i.status === 'COMPLETED' || i.status === 'CANCELLED');

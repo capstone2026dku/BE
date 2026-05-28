@@ -146,7 +146,6 @@ async function main() {
         code: r.code,
         openTime: r.openTime,
         closeTime: r.closeTime,
-        maxLoadScore: 600,
       },
     });
 

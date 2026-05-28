@@ -13,7 +13,6 @@ const menusRouter = require('./routes/menus');
 const ordersRouter = require('./routes/orders');
 const paymentsRouter = require('./routes/payments');
 const kitchenRouter = require('./routes/kitchen');
-const aiRouter = require('./routes/ai');
 const adminRouter = require('./routes/admin');
 
 const app = express();
@@ -32,7 +31,6 @@ app.use('/menus', menusRouter);
 app.use('/orders', ordersRouter);
 app.use('/payments', paymentsRouter);
 app.use('/kitchen', kitchenRouter);
-app.use('/ai', aiRouter);
 app.use('/admin', adminRouter);
 
 // 에러 핸들러 (마지막에 등록)

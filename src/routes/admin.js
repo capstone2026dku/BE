@@ -34,9 +34,9 @@ router.get('/restaurants', requireAdmin, async (req, res, next) => {
 // POST /admin/restaurants
 router.post('/restaurants', requireAdmin, async (req, res, next) => {
   try {
-    const { name, code, openTime, closeTime, maxLoadScore } = req.body;
+    const { name, code, openTime, closeTime } = req.body;
     const restaurant = await prisma.restaurant.create({
-      data: { name, code, openTime, closeTime, maxLoadScore: maxLoadScore || 600 },
+      data: { name, code, openTime, closeTime },
     });
     res.status(201).json(restaurant);
   } catch (err) {
@@ -95,14 +95,10 @@ router.patch('/menus/:id', requireAdmin, async (req, res, next) => {
 // GET /admin/orders/stats
 router.get('/orders/stats', requireAdmin, async (req, res, next) => {
   try {
-    const [totalOrders, todayOrders, avgAccuracy] = await Promise.all([
+    const [totalOrders, todayOrders] = await Promise.all([
       prisma.order.count(),
       prisma.order.count({
         where: { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } },
-      }),
-      prisma.loadLog.aggregate({
-        _avg: { loadScore: true, estimatedWaitSec: true, actualWaitSec: true },
-        where: { actualWaitSec: { not: null } },
       }),
     ]);
 
@@ -118,7 +114,6 @@ router.get('/orders/stats', requireAdmin, async (req, res, next) => {
       totalOrders,
       todayOrders,
       todayRevenue: revenueToday._sum.totalPrice || 0,
-      aiAccuracy: avgAccuracy._avg,
     });
   } catch (err) {
     next(err);

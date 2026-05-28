@@ -22,17 +22,15 @@ model User {
 }
 
 model Restaurant {
-  id           String      @id @default(uuid())
-  name         String
-  code         String      @unique
-  maxLoadScore Int         @default(600) @map("max_load_score")
-  isLocked     Boolean     @default(false) @map("is_locked")
-  lockedUntil  DateTime?   @map("locked_until")
-  openTime     String      @map("open_time")
-  closeTime    String      @map("close_time")
-  menus        Menu[]
-  orderItems   OrderItem[]
-  loadLogs     LoadLog[]
+  id          String      @id @default(uuid())
+  name        String
+  code        String      @unique
+  isLocked    Boolean     @default(false) @map("is_locked")
+  lockedUntil DateTime?   @map("locked_until")
+  openTime    String      @map("open_time")
+  closeTime   String      @map("close_time")
+  menus       Menu[]
+  orderItems  OrderItem[]
 
   @@map("restaurants")
 }
@@ -97,14 +95,3 @@ model Payment {
   @@map("payments")
 }
 
-model LoadLog {
-  id               String     @id @default(uuid())
-  restaurantId     String     @map("restaurant_id")
-  loadScore        Int        @map("load_score")
-  estimatedWaitSec Int        @map("estimated_wait_sec")
-  actualWaitSec    Int?       @map("actual_wait_sec")
-  recordedAt       DateTime   @default(now()) @map("recorded_at")
-  restaurant       Restaurant @relation(fields: [restaurantId], references: [id])
-
-  @@map("load_logs")
-}
