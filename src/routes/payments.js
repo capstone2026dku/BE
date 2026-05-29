@@ -14,16 +14,41 @@ router.post('/confirm', authenticate, async (req, res, next) => {
 
     // 개발 환경 Mock 결제
     if (process.env.NODE_ENV === 'development' && req.body.mock) {
-      const payment = await prisma.payment.create({
-        data: {
-          provider: 'mock',
-          providerTxId: `mock-${Date.now()}`,
-          status: 'PAID',
-          amount,
-          paidAt: new Date(),
+      const { randomUUID } = require('crypto');
+
+      const user = await prisma.user.upsert({
+        where: { id: req.user.userId },
+        update: {},
+        create: {
+          id: req.user.userId,
+          studentId: req.user.studentId || '32200000',
+          name: req.user.name || '테스트유저',
+          email: `${req.user.studentId || '32200000'}@dankook.ac.kr`,
+          googleSub: `mock-${req.user.userId}`,
         },
       });
-      return res.json({ paymentId: payment.id, status: 'PAID' });
+
+      const order = await prisma.order.create({
+        data: {
+          userId: user.id,
+          totalPrice: amount,
+          idempotencyKey: idempotencyKey || `mock-${randomUUID()}`,
+          status: 'PAID',
+          paidAt: new Date(),
+          payment: {
+            create: {
+              provider: 'mock',
+              providerTxId: `mock-${Date.now()}`,
+              status: 'PAID',
+              amount,
+              paidAt: new Date(),
+            },
+          },
+        },
+        include: { payment: true },
+      });
+
+      return res.json({ paymentId: order.payment.id, status: 'PAID' });
     }
 
     // 실제 토스 결제 승인
