@@ -10,11 +10,19 @@ const prisma = new PrismaClient();
 // POST /payments/confirm — 토스페이먼츠 결제 승인
 router.post('/confirm', authenticate, async (req, res, next) => {
   try {
-    const { paymentKey, orderId, amount, idempotencyKey } = req.body;
+    const { paymentKey, orderId, amount, idempotencyKey, mock } = req.body;
+    const isMock = mock === true || mock === 'true';
 
-    // 개발 환경 Mock 결제
-    if (process.env.NODE_ENV === 'development' && req.body.mock) {
-      const { randomUUID } = require('crypto');
+    // 1) mock 결제 — paymentKey/orderId 불필요 (발표·로컬 개발용)
+    if (isMock) {
+      if (!idempotencyKey) {
+        return res.status(400).json({ code: 'MISSING_KEY', message: 'idempotencyKey가 필요합니다.' });
+      }
+      if (amount == null || Number.isNaN(Number(amount))) {
+        return res.status(400).json({ code: 'MISSING_AMOUNT', message: 'amount가 필요합니다.' });
+      }
+
+      const parsedAmount = Number(amount);
 
       const user = await prisma.user.upsert({
         where: { id: req.user.userId },
@@ -28,11 +36,20 @@ router.post('/confirm', authenticate, async (req, res, next) => {
         },
       });
 
+      const existingOrder = await prisma.order.findUnique({
+        where: { idempotencyKey },
+        include: { payment: true },
+      });
+
+      if (existingOrder?.payment?.status === 'PAID') {
+        return res.json({ paymentId: existingOrder.payment.id, status: 'PAID' });
+      }
+
       const order = await prisma.order.create({
         data: {
           userId: user.id,
-          totalPrice: amount,
-          idempotencyKey: idempotencyKey || `mock-${randomUUID()}`,
+          totalPrice: parsedAmount,
+          idempotencyKey,
           status: 'PAID',
           paidAt: new Date(),
           payment: {
@@ -40,7 +57,7 @@ router.post('/confirm', authenticate, async (req, res, next) => {
               provider: 'mock',
               providerTxId: `mock-${Date.now()}`,
               status: 'PAID',
-              amount,
+              amount: parsedAmount,
               paidAt: new Date(),
             },
           },
@@ -51,7 +68,14 @@ router.post('/confirm', authenticate, async (req, res, next) => {
       return res.json({ paymentId: order.payment.id, status: 'PAID' });
     }
 
-    // 실제 토스 결제 승인
+    // 2) 실제 토스 결제 — mock이 아닐 때만 필수값 검사
+    if (!paymentKey || !orderId || amount == null) {
+      return res.status(400).json({
+        code: 'INVALID_REQUEST',
+        message: 'paymentKey, orderId, amount가 필요합니다.',
+      });
+    }
+
     const tossRes = await axios.post(
       'https://api.tosspayments.com/v1/payments/confirm',
       { paymentKey, orderId, amount },

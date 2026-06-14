@@ -70,12 +70,20 @@ router.post('/', authenticate, async (req, res, next) => {
   try {
     const { idempotencyKey, items, totalPrice } = req.body;
     if (!idempotencyKey) return res.status(400).json({ code: 'MISSING_KEY', message: 'idempotencyKey 필요' });
+    if (!items || items.length === 0) {
+      return res.status(400).json({ code: 'EMPTY_CART', message: '장바구니가 비어있습니다.' });
+    }
 
-    // 중복 주문 방지
-    const existing = await prisma.order.findUnique({ where: { idempotencyKey } });
-    if (existing) return res.json(existing);
+    const existing = await prisma.order.findUnique({
+      where: { idempotencyKey },
+      include: { orderItems: true },
+    });
 
-    // 결제 확인 (payment가 PAID 상태인지)
+    if (existing && existing.orderItems.length > 0) {
+      const fullOrder = await loadFullOrder(existing.id);
+      return res.json(fullOrder);
+    }
+
     const payment = await prisma.payment.findFirst({
       where: { order: { idempotencyKey }, status: 'PAID' },
     });
@@ -83,7 +91,6 @@ router.post('/', authenticate, async (req, res, next) => {
       return res.status(402).json({ code: 'PAYMENT_REQUIRED', message: '결제가 완료되지 않았습니다.' });
     }
 
-    // 메뉴 정보 재조회 (품절 재확인)
     const menuIds = items.map((i) => i.menuId);
     const menus = await prisma.menu.findMany({
       where: { id: { in: menuIds } },
@@ -94,71 +101,54 @@ router.post('/', authenticate, async (req, res, next) => {
     for (const item of items) {
       const menu = menuMap.get(item.menuId);
       if (menu?.isSoldout) {
-        // 결제 완료 후 품절 발생 → 환불 트리거
         await triggerRefund(payment.id);
         return res.status(422).json({ code: 'SOLDOUT_AFTER_PAYMENT', message: '결제 후 품절된 메뉴가 있습니다. 자동 환불 처리됩니다.' });
       }
     }
 
-    // 트랜잭션으로 Order + OrderItems 생성
     const order = await prisma.$transaction(async (tx) => {
-      const newOrder = await tx.order.create({
-        data: {
-          userId: req.user.userId,
-          totalPrice,
-          idempotencyKey,
-          status: 'PAID',
-          paidAt: new Date(),
-        },
-      });
+      let targetOrderId;
 
-      // Payment 연결
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: { orderId: newOrder.id },
-      });
-
-      // OrderItems 생성 (식당별 주문번호 채번)
-      const orderNumberCache = new Map();
-      for (const item of items) {
-        const menu = menuMap.get(item.menuId);
-        if (!menu) continue;
-
-        let orderNumber = orderNumberCache.get(menu.restaurantId);
-        if (!orderNumber) {
-          orderNumber = await issueOrderNumber(menu.restaurant.code);
-          orderNumberCache.set(menu.restaurantId, orderNumber);
-        }
-
-        await tx.orderItem.create({
+      if (existing) {
+        await tx.order.update({
+          where: { id: existing.id },
+          data: { totalPrice },
+        });
+        targetOrderId = existing.id;
+      } else {
+        const newOrder = await tx.order.create({
           data: {
-            orderId: newOrder.id,
-            menuId: menu.id,
-            restaurantId: menu.restaurantId,
-            orderNumber,
-            quantity: item.quantity,
-            unitPrice: menu.price,
+            userId: req.user.userId,
+            totalPrice,
+            idempotencyKey,
+            status: 'PAID',
+            paidAt: new Date(),
           },
         });
+        targetOrderId = newOrder.id;
+
+        if (payment.orderId !== newOrder.id) {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { orderId: newOrder.id },
+          });
+        }
       }
 
-      return newOrder;
+      await createOrderItems(tx, targetOrderId, items, menuMap);
+
+      return tx.order.findUnique({ where: { id: targetOrderId } });
     });
 
-    // 주문 상세 조회 (WebSocket 전송용)
-    const fullOrder = await prisma.order.findUnique({
-      where: { id: order.id },
-      include: { orderItems: { include: { menu: true, restaurant: true } }, user: true },
-    });
+    const fullOrder = await loadFullOrder(order.id);
 
-    // 식당별 WebSocket 전송
     const restaurantItems = new Map();
     for (const item of fullOrder.orderItems) {
       if (!restaurantItems.has(item.restaurantId)) restaurantItems.set(item.restaurantId, []);
       restaurantItems.get(item.restaurantId).push(item);
     }
-    for (const [restaurantId, items] of restaurantItems) {
-      broadcastToKitchen(restaurantId, { type: 'NEW_ORDER', order: { ...fullOrder, orderItems: items } });
+    for (const [restaurantId, orderItems] of restaurantItems) {
+      broadcastToKitchen(restaurantId, { type: 'NEW_ORDER', order: { ...fullOrder, orderItems } });
     }
 
     res.status(201).json(fullOrder);
@@ -166,6 +156,43 @@ router.post('/', authenticate, async (req, res, next) => {
     next(err);
   }
 });
+
+async function loadFullOrder(orderId) {
+  return prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      orderItems: { include: { menu: true, restaurant: true } },
+      user: true,
+      payment: true,
+    },
+  });
+}
+
+async function createOrderItems(tx, orderId, items, menuMap) {
+  const orderNumberCache = new Map();
+
+  for (const item of items) {
+    const menu = menuMap.get(item.menuId);
+    if (!menu) continue;
+
+    let orderNumber = orderNumberCache.get(menu.restaurantId);
+    if (!orderNumber) {
+      orderNumber = await issueOrderNumber(menu.restaurant.code);
+      orderNumberCache.set(menu.restaurantId, orderNumber);
+    }
+
+    await tx.orderItem.create({
+      data: {
+        orderId,
+        menuId: menu.id,
+        restaurantId: menu.restaurantId,
+        orderNumber,
+        quantity: item.quantity,
+        unitPrice: menu.price,
+      },
+    });
+  }
+}
 
 // GET /orders/me
 router.get('/me', authenticate, async (req, res, next) => {
